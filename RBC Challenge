@@ -1,0 +1,621 @@
+install.packages(readr)
+install.packages(dplyr)
+install.packages(ggplot2)
+install.packages(InformationValue)
+install.packages(tidyverse)
+install.packages(ROCR)        
+install.packages(caret)       
+install.packages(rpart)       
+install.packages(rpart.utils) 
+install.packages(rpart.plot)
+install.packages(randomForest) 
+install.packages(Information)
+install.packages(pROC)
+install.packages(corrplot)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(InformationValue)
+library(tidyverse)
+library(ROCR)        # Model Performance and ROC curve
+library(caret)       # Classification and Regression Training -  for any machine learning algorithms
+library(rpart)       # Recursive partitioning for classification, regression and survival trees
+library(rpart.utils) # Tools for parsing and manipulating rpart objects, including generating machine readable rules
+library(rpart.plot)  # Plot 'rpart' Models: An Enhanced Version of 'plot.rpart'
+library(randomForest)# Leo Breiman and Cutler's Random Forests for Classification and Regression 
+library(Information)
+library(pROC)
+library(corrplot)
+
+setwd("D:/Documents/Data/RBC Loan Credit risk challenge")
+data <- read_csv("LoanStats_2018Q1_ds.csv", col_types = cols(int_rate = col_number(), revol_util = col_number()))
+
+#Initail overview of data
+names(data)
+str(data)
+
+#Visualizing/counting target variable 
+table(data$loan_status)
+table(is.na(data$loan_status))
+
+#Goal of this project is to find good and bad loans. Classify "loan_status" into binary
+#Transforming multiple categories of target variable into binary for easier classification "good loan" and "bad loan". Bad loans = 1
+data$Creditability <- ifelse(data$loan_status == "Current" | data$loan_status == "Fully Paid",0,1)
+
+#Change "int_rate" and "revol_util" into decimals
+data$int_rate <- data$int_rate/100
+data$revol_util <- data$revol_util/100
+
+#Change "acc_now_delinq" into a factor
+data$acc_now_delinq <- as.factor(data$acc_now_delinq)
+
+# Change all "character" class features into "factor" classes
+#Find all CHARACTER column names (variable names)
+char_vars <- names(data[, sapply(data, class) == 'character'])
+
+#Convert the character variables into factors
+data[char_vars] <- lapply(data[char_vars], factor)
+remove(char_vars)
+
+#Factor variables
+factor_vars <- names(data[, sapply(data, class) == 'factor'])
+
+# Function for detecting NA observations
+na_rate <- function(x) {x %>% is.na() %>% sum() / length(x)}
+a <- sapply(data, na_rate) %>% round(4) %>% sort()
+
+#Find names of features which have >50% missing values
+names <- subset(a, a >= 0.5) %>% names()
+
+#Remove features which have >50% missing values
+data2 <- select(data, -names)
+
+#Find names of features which have >15 factors
+names <- data2[, sapply(data2, nlevels) > 15] %>% names()
+
+#Remove features which have >15 factors
+data3 <- select(data2, -names)
+
+#Remove features which are dates
+data3 <- subset(data3, select = -c(issue_d, next_pymnt_d, loan_status))
+
+#Set seed
+set.seed(123)
+
+#Partition the data 70/30
+b = sample(nrow(data3), nrow(data3)*.7)
+train<-data3[b,]
+test<-data3[-b,]
+
+#Testing significance of values using regression - Cannot create regression with this set of data
+glm1 = glm(train$Creditability ~., data=train, family="binomial")
+summary(glm1)
+
+#----------------------Significance testing--------------------------------
+# Get all NUMERIC column names (varialbe names)
+num_vars <- names(data3[, sapply(data3, class) == 'numeric'])
+
+#Create new data subset containing only NUMERIC variables
+data4 <- subset(data3, select = num_vars)
+
+#Partition the data 70/30
+b = sample(nrow(data4), nrow(data4)*.7)
+train<-data4[b,]
+test<-data4[-b,]
+
+#Testing significance of values using regression 
+glm2 = glm(Creditability ~., data=train, family="binomial", maxit=200)
+summary(glm2)
+#Some variables are significant 
+
+#Remove features which contain N/A values
+data4 <- subset(data4, select =-c(funded_amnt, collection_recovery_fee, policy_code, num_tl_120dpd_2m, num_tl_30dpd, tax_liens))
+
+#Second Partition of the data 70/30
+b = sample(nrow(data4), nrow(data4)*.7)
+train<-data4[b,]
+test<-data4[-b,]
+
+#Testing significance of values using regression 
+glm3 <- glm(Creditability~.,data=train,family="binomial")
+summary(glm3)
+
+#Create a score variable in test data 
+test$score <- predict(glm3, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(test$score >= 0.5))
+
+#Check the probabilities
+test$score
+# There are N/A in the results and therefore we cannot continue with this analysis
+# Dealing with missing values: 
+#1. Removing missing values
+#2. Replacing missing values
+
+#Find missing values in num_vars
+a <- sapply(data4, na_rate) %>% round(4) %>% sort()
+
+#Find names of features which have missing values
+names <- subset(a, a != 0) %>% names()
+
+#1. Remove misssing value rows
+data5 <- data4[complete.cases(data4[ , names]),]
+
+#Test regression with numerical only
+#Third Partition of the data 70/30
+b = sample(nrow(data5), nrow(data5)*.7)
+train<-data5[b,]
+test<-data5[-b,]
+
+#Regression testing
+glm4 <- glm(Creditability~.,data=train,family="binomial")
+summary(glm4)
+
+#Create a score variable in test data 
+glm_4_score <- predict(glm4, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(glm_4_score >= 0.5))
+
+#Check the probabilities
+glm_4_score
+
+#Test regression but add factors too
+glm_4_pred <- prediction(glm_4_score, test$Creditability)
+
+#Check the performance/accuracy of prediction
+glm_4_perf <- performance(glm_4_pred,"tpr","fpr")
+
+#Classification of the probabilities into binary with a 0.5 threshold
+glm_4_class <- ifelse(glm_4_score > 0.5, "1", "0") %>% as.numeric()
+
+#AUC
+as.numeric(performance(glm_4_pred, "auc")@y.values)
+
+#ROC curve
+roc(test$Creditability, glm_4_score, plot = TRUE, print.auc = TRUE,
+    percent = TRUE, 
+    xlab = "False Positive Rate (Specificity)", 
+    ylab = "True Positive Rate (Sensitivity)", 
+    col = "#377eb8", 
+    lwd = 4, 
+    main = "Numeric Only - Removed Missing Values")
+
+roc_obj <- roc(test$Creditability, glm_4_score)
+
+#AUC of ROC
+auc(roc_obj)
+
+glm_4_conf_matrix <- table(glm_4_class,test$Creditability)
+glm_4_conf_matrix
+
+sensitivity(glm_4_conf_matrix)
+specificity(glm_4_conf_matrix)
+
+#Function selects top 3 variables per row
+ftopk<- function(x,top=3){
+  res=names(x)[order(x, decreasing = TRUE)][1:top]
+  paste(res,collapse=";",sep="")
+}
+
+#Regression using "terms" instead of "response"
+glm5<-predict(glm4,type='terms',test)
+
+#The top 3 variables
+topk=apply(glm5,1,ftopk,top=3)
+topk
+
+#add reason list to scored tets sample
+#test<-cbind(test, topk)
+
+#Random forests
+rf_model1 <- randomForest(factor(Creditability) ~ ., data = test)
+
+plot.roc(test$Creditability, rf_model1$votes[,1], percent = TRUE, 
+         col = "#4daf4a", 
+         lwd = 4, 
+         print.auc = TRUE, 
+         add=TRUE, 
+         print.auc.y = 20)
+
+legend("bottomright", legend=c("Logistic Regression - Blue", "Random Forest - Green"))
+
+#---------------Replacing Missing Values (Mean)-----------------------------
+#2. Replace missing values with mean
+NA2mean <- function(x) replace(x, is.na(x), mean(x, na.rm = TRUE))
+data6 <- as.data.frame(lapply(data4, NA2mean))
+
+#check for missing values
+table(is.na(data6))
+
+#Fourth Partitioning 70/30
+b = sample(nrow(data6), nrow(data6)*.7)
+train6<-data6[b,]
+test6<-data6[-b,]
+
+#Regression testing
+glm7 <- glm(Creditability~.,data=train6,family="binomial")
+summary(glm7)
+
+#Create a score variable in test data 
+glm_6_score <- predict(glm7, newdata=test6, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test6$Creditability, as.numeric(glm_6_score >= 0.5))
+
+#Check the probabilities
+glm_6_score
+
+#Test regression but add factors too
+glm_6_pred <- prediction(glm_6_score, test6$Creditability)
+
+#Check the performance/accuracy of prediction
+glm_6_perf <- performance(glm_6_pred,"tpr","fpr")
+
+#Classification of the probabilities into binary with a 0.5 threshold
+glm_6_class <- ifelse(glm_6_score > 0.5, "1", "0") %>% as.numeric()
+
+#AUC
+as.numeric(performance(glm_6_pred, "auc")@y.values)
+
+#ROC curve
+roc(test6$Creditability, glm_6_class, plot = TRUE, print.auc = TRUE,
+    percent = TRUE, 
+    xlab = "False Positive Rate (Specificity)", 
+    ylab = "True Positive Rate (Sensitivity)", 
+    col = "#f2fa1b", 
+    lwd = 4, main = "Numeric Only - Imputed Mean")
+
+roc_obj6 <- roc(test6$Creditability, glm_6_score)
+
+#AUC of ROC
+auc(roc_obj6)
+
+glm_6_conf_matrix <- table(glm_6_class,test6$Creditability)
+glm_6_conf_matrix
+
+sensitivity(glm_6_conf_matrix)
+specificity(glm_6_conf_matrix)
+
+#Regression using "terms" instead of "response"
+glm8 <- predict(glm7,type='terms',test6)
+
+#The top 3 variables
+topk6 <- apply(glm5,1,ftopk,top=3)
+topk6
+
+#Combine test and the top 3 variables per row
+#test<-cbind(test, topk)
+
+#Random forests
+rf_model2 <- randomForest(factor(Creditability) ~ ., data = test6)
+
+plot.roc(test6$Creditability, rf_model2$votes[,1], percent = TRUE, 
+         col = "#fa391b", 
+         lwd = 4, 
+         print.auc = TRUE, 
+         add=TRUE, 
+         print.auc.y = 20)
+
+legend("bottomright", legend=c("Logistic Regression - Yellow", "Random Forest - Red"))
+
+#-----Combining factor and numeric variables while excluding variabless which were not significant in previous analysis--------------
+a <- sapply(data, na_rate) %>% round(4) %>% sort()
+
+#Find names of features which have >50% missing values
+names <- subset(a, a >= 0.5) %>% names()
+
+#Remove features which have >50% missing values
+data2 <- select(data, -names)
+
+#Find names of features which have >15 factors
+names <- data2[, sapply(data2, nlevels) > 15] %>% names()
+
+#Remove features which have >15 factors
+data3 <- select(data2, -names)
+
+#Remove features which were insignificant in previous analysis
+data3 <- subset(data3, select = -c(issue_d, next_pymnt_d, loan_status))
+data3 <- subset(data3, select =-c(home_ownership, funded_amnt, collection_recovery_fee, policy_code, num_tl_120dpd_2m, num_tl_30dpd, tax_liens))
+
+#Find missing values
+a <- sapply(data3, na_rate) %>% round(4) %>% sort()
+
+#Find names of features which have missing values
+names <- subset(a, a != 0) %>% names()
+
+#Remove misssing value rows
+data3 <- data3[complete.cases(data3[ , names]),]
+
+#Set seed
+set.seed(123)
+
+#Partition the data 70/30
+b = sample(nrow(data3), nrow(data3)*.7)
+train<-data3[b,]
+test<-data3[-b,]
+
+#Testing significance of values using regression 
+glm1 = glm(train$Creditability ~., data=train, family="binomial")
+summary(glm1)
+
+#Create a score variable in test data 
+test$score <- predict(glm1, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(test$score >= 0.5))
+
+#Check the probabilities
+test$score
+
+#Create a score variable in test data 
+glmx_score <- predict(glm1, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(glmx_score >= 0.5))
+
+#Check the probabilities
+glmx_score
+
+#Test regression but add factors too
+glmx_pred <- prediction(glmx_score, test$Creditability)
+
+#Check the performance/accuracy of prediction
+glmx_perf <- performance(glmx_pred,"tpr","fpr")
+
+#Classification of the probabilities into binary with a 0.5 threshold
+glmx_class <- ifelse(glmx_score > 0.5, "1", "0") %>% as.numeric()
+
+#AUC
+as.numeric(performance(glmx_pred, "auc")@y.values)
+
+#ROC curve
+roc(test$Creditability, glmx_class, plot = TRUE, print.auc = TRUE,
+    percent = TRUE, 
+    xlab = "False Positive Rate (Specificity)", 
+    ylab = "True Positive Rate (Sensitivity)", 
+    col = "#377eb8", 
+    lwd = 4, 
+    main = "Significant Factor + Numeric Variables")
+roc_obj <- roc(test$Creditability, glmx_score)
+
+#AUC of ROC
+auc(roc_obj)
+
+conf_matrix <- table(glmx_class,test$Creditability)
+conf_matrix
+
+#sensitivity and Specificity verification
+sensitivity(conf_matrix)
+specificity(conf_matrix)
+
+#Regression using "terms" instead of "response"
+glm_new<-predict(glm1,type='terms',test)
+
+#The top 3 variables
+topk=apply(glm_new,1,ftopk,top=3)
+topk
+
+#Random forests
+rf_model3 <- randomForest(factor(Creditability) ~ ., data = test)
+
+plot.roc(test$Creditability, rf_model3$votes[,1], percent = TRUE, 
+         col = "#4daf4a", 
+         lwd = 4, 
+         print.auc = TRUE, 
+         add=TRUE, 
+         print.auc.y = 20)
+
+legend("bottomright", legend=c("Logistic Regression - Blue", "Random Forest - Green"))
+
+test<-cbind(test, topk)
+View(test$topk)
+
+#-------------------------Pearson Correlation Testing-------------------------
+#Data5 contains only numeric variables with no missing values - Refer back to GLM2
+#Create correlation matrix of all numeric variables
+cm <- cor(data5)
+
+#Plot the correlation matrix
+corrplot(cm, type = "upper", tl.cex = 0.75, na.label = "x", sig.level = .05, number.cex = 0.6)
+
+#Find variables which are highly correlated, using cutoff 0f 0.8
+hc <- findCorrelation(cm, cutoff=0.8) %>% sort()
+
+#Remove variables which are highly correlated
+data6 <- data5[,-c(hc)]
+
+#New correlation matrix 
+cm2 <- cor(data6)
+
+#Plot new correlation matrix
+corrplot(cm2, type = "upper", tl.cex = 0.75, number.cex = 0.6)
+
+#Variable names left
+names(data6)
+
+#Partition the data 70/30
+b = sample(nrow(data6), nrow(data6)*.7)
+train<-data6[b,]
+test<-data6[-b,]
+
+#Testing significance of values using regression 
+glm9 = glm(train$Creditability ~., data=train, family="binomial")
+summary(glm9)
+
+#Create a score variable in test data 
+test$score <- predict(glm9, newdata=test, type="response")
+
+#Create a score variable in test data 
+glm9_score <- predict(glm9, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(test$score >= 0.5))
+
+#Check the probabilities
+glm9_score
+
+#Test regression but add factors too
+glm9_pred <- prediction(glm9_score, test$Creditability)
+
+#Check the performance/accuracy of prediction
+glm9_perf <- performance(glm9_pred,"tpr","fpr")
+
+#Classification of the probabilities into binary with a 0.5 threshold
+glm9_class <- ifelse(glm9_score > 0.5, "1", "0") %>% as.numeric()
+
+#AUC
+as.numeric(performance(glm9_pred, "auc")@y.values)
+
+#ROC curve
+roc(test$Creditability, glm9_class, plot = TRUE, print.auc = TRUE,
+    percent = TRUE, 
+    xlab = "False Positive Rate (Specificity)", 
+    ylab = "True Positive Rate (Sensitivity)", 
+    col = "#377eb8", 
+    lwd = 4, 
+    main = "Correlation Matrix Results")
+roc_obj <- roc(test$Creditability, glm9_score)
+
+#AUC of ROC
+auc(roc_obj)
+
+conf_matrix <- table(glm9_class,test$Creditability)
+conf_matrix
+
+#sensitivity and Specificity verification
+sensitivity(conf_matrix)
+specificity(conf_matrix)
+
+#Regression using "terms" instead of "response"
+glm10<-predict(glm9,type='terms',test)
+
+#The top 3 variables
+topk=apply(glm10,1,ftopk,top=3)
+topk
+
+#Random forests
+rf_model4 <- randomForest(factor(Creditability) ~ ., data = test)
+
+plot.roc(test$Creditability, rf_model4$votes[,1], percent = TRUE, 
+         col = "#4daf4a", 
+         lwd = 4, 
+         print.auc = TRUE, 
+         add=TRUE, 
+         print.auc.y = 20,
+         main = "Correlation Matrix Results")
+
+legend("bottomright", legend=c("Logistic Regression - Blue", "Random Forest - Green"))
+
+#-------Analysis Using Information Weight as Variable Selection Tool----------------
+
+# Variable selection using Information Value
+infotables <- create_infotables(data = data2, y = "Creditability")
+View(infotables$Summary)
+
+#Siddiqi (2006) Credit Risk Scorecards
+# 
+#Information Value 	Variable Predictiveness
+#<0.02 	Not useful for prediction
+#0.02 to 0.1 	Weak predictive Power
+#0.1 to 0.3 	Medium predictive Power
+#0.3 to 0.5 	Strong predictive Power
+#>0.5 	Suspicious Predictive Power
+
+#Select variables with high predictive power
+variable_selection_IV <- subset(infotables$Summary, infotables$Summary$IV >= 0.1)
+
+#Obtain names of variables kept
+c <- variable_selection_IV$Variable
+
+#Remove variables which have low information value
+data8 <- data2[,c(c,"Creditability")]
+
+#Remove missing values
+data8 <- data8[complete.cases(data8[ , c]),]
+
+#Using the model we find certain variables are insignificant or NA
+data8 <- subset(data8, select = -c(earliest_cr_line, grade))
+
+#Set seed
+set.seed(123)
+
+#Partition the data 70/30
+b = sample(nrow(data8), nrow(data8)*.7)
+train<-data8[b,]
+test<-data8[-b,]
+
+#Testing significance of values using regression 
+glm11 = glm(train$Creditability ~., data=train, family="binomial")
+summary(glm11)
+
+#Create a score variable in test data 
+test$score <- predict(glm11, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(test$score >= 0.5))
+
+#Check the probabilities
+test$score
+
+#Create a score variable in test data 
+glm11_score <- predict(glm11, newdata=test, type="response")
+
+#Create a confusion matrix using the probabilities/scores greater than 0.5
+table(test$Creditability, as.numeric(glm11_score >= 0.5))
+
+#Check the probabilities
+glm11_score
+
+#Test regression but add factors too
+glm11_pred <- prediction(glm11_score, test$Creditability)
+
+#Check the performance/accuracy of prediction
+glm11_perf <- performance(glm11_pred,"tpr","fpr")
+
+#Classification of the probabilities into binary with a 0.5 threshold
+glm11_class <- ifelse(glm11_score > 0.5, "1", "0") %>% as.numeric()
+
+#AUC
+as.numeric(performance(glm11_pred, "auc")@y.values)
+
+#ROC curve
+roc(test$Creditability, glm11_class, plot = TRUE, print.auc = TRUE,
+    percent = TRUE, 
+    xlab = "False Positive Rate (Specificity)", 
+    ylab = "True Positive Rate (Sensitivity)", 
+    col = "#377eb8", 
+    lwd = 4, 
+    main = "Information Value/Weight Variables")
+roc_obj <- roc(test$Creditability, glm11_score)
+
+#AUC of ROC
+auc(roc_obj)
+
+conf_matrix <- table(glm11_class,test$Creditability)
+conf_matrix
+
+#sensitivity and Specificity verification
+sensitivity(conf_matrix)
+specificity(conf_matrix)
+
+#Regression using "terms" instead of "response"
+glm12<-predict(glm11,type='terms',test)
+
+#The top 3 variables
+topk=apply(glm12,1,ftopk,top=3)
+topk
+
+#Random forests
+rf_model4 <- randomForest(factor(Creditability) ~ ., data = test)
+
+plot.roc(test$Creditability, rf_model4$votes[,1], percent = TRUE, 
+         col = "#4daf4a", 
+         lwd = 4, 
+         print.auc = TRUE, 
+         add=TRUE, 
+         print.auc.y = 40)
+
+legend("bottomright", legend=c("Logistic Regression - Blue", "Random Forest - Green"))
